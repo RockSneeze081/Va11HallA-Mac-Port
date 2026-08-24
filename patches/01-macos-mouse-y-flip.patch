@@ -1,0 +1,19 @@
+diff --git a/src/backends/appkit.m b/src/backends/appkit.m
+index 5c72fa6..e531452 100644
+--- a/src/backends/appkit.m
++++ b/src/backends/appkit.m
+@@ -335,8 +335,13 @@ void platformSetWindowSize(int32_t width, int32_t height) {
+ 
+ void platformGetMousePos(double *xPos, double *yPos) {
+     NSPoint mouseLocation = [window mouseLocationOutsideOfEventStream];
++    // AppKit's window/view coordinate space is bottom-up (origin at the bottom-left, Y grows
++    // upward); every other backend (glfw's glfwGetCursorPos, SDL's SDL_GetMouseState) reports
++    // mouse position top-down like the game expects (origin at the top-left, Y grows downward).
++    // Flip against the content view's height so this backend matches the others.
++    NSRect bounds = [glView bounds];
+     *xPos = mouseLocation.x;
+-    *yPos = mouseLocation.y;
++    *yPos = bounds.size.height - mouseLocation.y;
+ }
+ 
+ NSMenu* createAppMenu() {

@@ -1,0 +1,11 @@
+#!/bin/bash
+# Goes at Contents/MacOS/<CFBundleExecutable> inside the .app bundle.
+# Resolves paths relative to this script's own location rather than the launch-time cwd
+# (which Finder sets to something unrelated for GUI-launched apps), and runs the real
+# binary from a writable support directory so save files/config have somewhere sensible
+# to land instead of inside the (often read-only, e.g. when run from a mounted .dmg) bundle.
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SUPPORT_DIR="$HOME/Library/Application Support/VA-11 Hall-A"
+mkdir -p "$SUPPORT_DIR"
+cd "$SUPPORT_DIR" || exit 1
+exec "$DIR/butterscotch-bin" "$DIR/../Resources/data.win"

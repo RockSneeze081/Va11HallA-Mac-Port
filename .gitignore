@@ -1,0 +1,13 @@
+.DS_Store
+
+# Butterscotch is cloned fresh by packaging/build-app.sh, not vendored here.
+butterscotch/
+
+# Build/packaging output - contains the actual copyrighted game data, never committed.
+dmg_staging/
+dist/
+*.dmg
+*.icns
+data.win
+game.unx
+*.iconset/
