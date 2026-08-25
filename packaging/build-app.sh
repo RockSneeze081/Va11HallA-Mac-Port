@@ -3,11 +3,15 @@
 # .app + .dmg. Run from the repo root. Needs your own legally-obtained data.win/game.unx -
 # this script does not provide one and will refuse to run without a path to it.
 #
-# Usage: packaging/build-app.sh /path/to/data.win [/path/to/icon.png]
+# Usage: packaging/build-app.sh /path/to/data.win [/path/to/icon.png] [/path/to/scripts]
 set -euo pipefail
 
-DATA_WIN="${1:?Usage: $0 /path/to/data.win [/path/to/icon.png]}"
+DATA_WIN="${1:?Usage: $0 /path/to/data.win [/path/to/icon.png] [/path/to/scripts]}"
 ICON_PNG="${2:-}"
+# GameMaker "Included Files" the game opens by relative path at runtime (dialogue scripts,
+# etc.) - not embedded in data.win itself. Defaults to a sibling `scripts/` next to data.win,
+# which is where it lands in a typical GameMaker export; pass a third argument to override.
+SCRIPTS_DIR="${3:-$(dirname "$DATA_WIN")/scripts}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUTTERSCOTCH_DIR="$REPO_ROOT/butterscotch"
@@ -46,6 +50,14 @@ rm -rf "$STAGING"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BUILD_DIR/butterscotch" "$APP/Contents/MacOS/butterscotch-bin"
 cp "$DATA_WIN" "$APP/Contents/Resources/data.win"
+
+if [ -d "$SCRIPTS_DIR" ]; then
+    echo "Bundling Included Files from $SCRIPTS_DIR..."
+    cp -R "$SCRIPTS_DIR" "$APP/Contents/Resources/scripts"
+else
+    echo "warning: no scripts/ directory found at $SCRIPTS_DIR - dialogue-heavy scenes (e.g. New Game) will hang. Pass it explicitly as a third argument if it lives elsewhere." >&2
+fi
+
 cp "$REPO_ROOT/packaging/Info.plist.template" "$APP/Contents/Info.plist"
 cp "$REPO_ROOT/packaging/launcher.sh.template" "$APP/Contents/MacOS/VA-11 Hall-A"
 chmod +x "$APP/Contents/MacOS/VA-11 Hall-A"

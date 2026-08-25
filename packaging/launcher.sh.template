@@ -7,5 +7,12 @@
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUPPORT_DIR="$HOME/Library/Application Support/VA-11 Hall-A"
 mkdir -p "$SUPPORT_DIR"
+# The game's own GameMaker "Included Files" (scripts/eng/*.txt, etc.) are opened by GML at
+# runtime with plain relative paths, resolved against the process cwd (SUPPORT_DIR, not the
+# bundle) - symlink them in so they resolve the same way the bundle-relative Resources/scripts
+# copy does, without duplicating the data on disk.
+if [ -d "$DIR/../Resources/scripts" ] && [ ! -e "$SUPPORT_DIR/scripts" ]; then
+    ln -s "$DIR/../Resources/scripts" "$SUPPORT_DIR/scripts"
+fi
 cd "$SUPPORT_DIR" || exit 1
 exec "$DIR/butterscotch-bin" "$DIR/../Resources/data.win"

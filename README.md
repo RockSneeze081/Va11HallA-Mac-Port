@@ -105,6 +105,53 @@ void platformGetMousePos(double *xPos, double *yPos) {
 Confirmed fixed by the person actually playing it in real time, not just by
 reading the code.
 
+### New Game hung on a black screen, cursor spinning, music still playing
+
+Two separate problems stacked on top of each other, found with `sample` (a
+call-stack profile of the hung process, showing `executeLoop` stuck calling
+the file-read builtins in a tight loop) plus temporary diagnostic logging in
+those builtins:
+
+1. **`show_error` was entirely unimplemented.** Real GameMaker's
+   `show_error(message, abort)` logs/displays an error and, if `abort` is
+   true, halts the game. Butterscotch had no registration for it at all, so
+   it fell through the VM's generic "unknown function → return undefined,
+   keep going" fallback. VA-11 Hall-A calls `show_error` as part of its own
+   error-recovery path when a script file lookup fails — with the builtin
+   silently doing nothing, that recovery path never actually recovered,
+   and the caller looped forever instead of bailing out. Fixed by
+   implementing it properly in `src/vm_builtins.c` (log the message, set
+   the runner's exit flag when `abort` is true) and registering it.
+2. **That alone wasn't the real fix** — implementing `show_error` just
+   turned the silent infinite loop into a *logged* infinite loop
+   (`Error locating pointer!` repeated hundreds of times). The actual root
+   cause: `scripts/eng/anna_script.txt` (and its language siblings) are
+   GameMaker "Included Files" — loose asset files shipped as siblings to
+   `data.win`, not embedded inside it. Their *names* live in `data.win`'s
+   string table (confirmed with `grep -a`), but the file content itself has
+   to be extracted and bundled separately, and that step had been missed
+   when the original `data.win` was pulled from the GOG installer. Once the
+   `scripts/` directory was actually extracted and bundled next to
+   `data.win`, the hang was gone.
+
+Confirmed fixed by the person playing it. `packaging/build-app.sh` now
+bundles `scripts/` automatically (see **Building it yourself** below) —
+previously this was done by hand and easy to forget, which is exactly how
+it got missed the first time.
+
+### Small QoL additions
+
+- **Cursor hidden over the game window** — the game draws its own cursor
+  sprite, so the OS arrow was doubling up on top of it. Fixed with the
+  standard AppKit pattern (an invisible `NSCursor` tied to a cursor rect via
+  `resetCursorRects`), rather than manually toggling `NSCursor hide`/`unhide`
+  on enter/exit events, which is easy to leave desynced.
+- **Window title branded** — turned out `platformSetWindowTitle` only fires
+  if the game itself calls `window_set_caption()` from GML, which VA-11
+  Hall-A never does; the title actually shown at launch is set directly in
+  `platformInit`. Branded both spots for consistency, but the one in
+  `platformInit` is the one that actually matters here.
+
 ### Everything else
 
 Nothing else needed touching. Save-file/config path handling wasn't obviously
@@ -118,21 +165,26 @@ if and when that lands upstream — cheap insurance, not a fix for a confirmed b
 ## Building it yourself
 
 You need your own legally-obtained copy of the game's data file (any
-GameMaker export — Windows, Mac, Linux — as long as it's not YYC-compiled).
-This repo does not provide one.
+GameMaker export — Windows, Mac, Linux — as long as it's not YYC-compiled),
+**and** the `scripts/` folder that ships alongside it (GameMaker "Included
+Files" — dialogue scripts the game opens by filename at runtime; without
+them, New Game hangs on a black screen). In a typical export this sits right
+next to the data file; if it doesn't, pass its path explicitly. This repo
+provides neither.
 
 ```bash
 git clone <this-repo-url>
 cd va11-mac-port
-packaging/build-app.sh /path/to/data.win [/path/to/icon.png]
+packaging/build-app.sh /path/to/data.win [/path/to/icon.png] [/path/to/scripts]
 ```
 
-This clones Butterscotch fresh, applies `patches/01-macos-mouse-y-flip.patch`,
-builds it (`-DBACKEND=appkit -DAUDIO_BACKEND=miniaudio`, both dependency-free —
-AppKit/Cocoa/GameController are system frameworks, miniaudio is header-only),
-stages a proper `.app` bundle (using `packaging/Info.plist.template` and
-`packaging/launcher.sh.template`), builds an `.icns` from the optional icon
-PNG via `sips`/`iconutil`, and packages the result as `dist/VA-11 Hall-A.dmg`
+This clones Butterscotch fresh, applies every patch in `patches/*.patch` in
+order, builds it (`-DBACKEND=appkit -DAUDIO_BACKEND=miniaudio`, both
+dependency-free — AppKit/Cocoa/GameController are system frameworks,
+miniaudio is header-only), stages a proper `.app` bundle (using
+`packaging/Info.plist.template` and `packaging/launcher.sh.template`,
+including `scripts/` if found), builds an `.icns` from the optional icon PNG
+via `sips`/`iconutil`, and packages the result as `dist/VA-11 Hall-A.dmg`
 with the usual drag-to-`/Applications` layout.
 
 **First launch**: since this isn't signed with an Apple Developer certificate,
@@ -143,12 +195,19 @@ If you'd rather build Butterscotch manually instead of via the script:
 
 ```bash
 git clone https://github.com/MrPowerGamerBR/Butterscotch.git
-cd Butterscotch && git apply /path/to/patches/01-macos-mouse-y-flip.patch
+cd Butterscotch
+git apply /path/to/patches/01-macos-mouse-y-flip.patch
+git apply /path/to/patches/02-newgame-hang-fix-and-branding.patch
 mkdir build && cd build
 cmake -DPLATFORM=cli -DBACKEND=appkit -DAUDIO_BACKEND=miniaudio -DCMAKE_BUILD_TYPE=Release ..
 cmake --build .
 ./butterscotch /path/to/data.win
 ```
+
+Note that running it this way, outside the packaged `.app`, means the
+process's own working directory has to actually be the folder containing
+`scripts/` for New Game to work — the packaged launcher handles this for
+you (see **New Game hung...** above); a bare manual run doesn't.
 
 Built and tested against Butterscotch commit `5330e02feb0ebadc79262cdaeec7ba2cd404fb73`
 (2026-08-24) — it's explicitly early-stage software per its own README, so a
@@ -156,8 +215,11 @@ later commit may behave differently.
 
 ## Repo layout
 
-- `patches/01-macos-mouse-y-flip.patch` — the one real code change, against
+- `patches/01-macos-mouse-y-flip.patch` — the mouse Y-axis fix, against
   upstream Butterscotch.
+- `patches/02-newgame-hang-fix-and-branding.patch` — the `show_error`
+  implementation, cursor-hide, and window-title branding, against upstream
+  Butterscotch (applies on top of patch 01).
 - `packaging/` — the `.app`/`.dmg` build tooling (`build-app.sh`,
   `Info.plist.template`, `launcher.sh.template`). All original to this repo,
   no upstream/copyrighted content.

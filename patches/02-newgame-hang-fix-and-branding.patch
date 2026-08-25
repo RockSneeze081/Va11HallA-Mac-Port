@@ -1,0 +1,89 @@
+diff --git a/src/backends/appkit.m b/src/backends/appkit.m
+index 5c72fa6..bc7b456 100644
+--- a/src/backends/appkit.m
++++ b/src/backends/appkit.m
+@@ -261,6 +261,22 @@ - (void)updateTrackingAreas
+     [self addTrackingArea:area];
+ }
+ 
++// The game draws its own cursor sprite (real mouse position is tracked regardless via
++// RunnerMouse_*, unaffected by this - AppKit's system cursor is a purely visual overlay on
++// top), so leaving the OS arrow cursor visible too gives a distracting double-cursor look.
++// This is the standard AppKit way to swap a view's cursor - an NSCursor tied to a cursor rect
++// via resetCursorRects, which the window server manages automatically on enter/exit/resize -
++// rather than manually balancing -[NSCursor hide]/-unhide against mouse-enter/exit events,
++// which is easy to get out of sync (e.g. one swallowed exit event leaves the pointer hidden
++// forever, even outside the window).
++- (void)resetCursorRects
++{
++    [super resetCursorRects];
++    NSImage *blank = [[NSImage alloc] initWithSize:NSMakeSize(1, 1)];
++    NSCursor *invisibleCursor = [[NSCursor alloc] initWithImage:blank hotSpot:NSZeroPoint];
++    [self addCursorRect:self.bounds cursor:invisibleCursor];
++}
++
+ - (void)keyDown:(NSEvent *)event {
+     RunnerKeyboard_onKeyDown(g_runner->keyboard, nsKeyToGML(event.keyCode));
+ }
+@@ -301,7 +317,9 @@ - (void)scrollWheel:(NSEvent *)event {
+ @end
+ 
+ void platformSetWindowTitle(const char* title) {
+-    [window setTitle:[NSString stringWithFormat:@"Butterscotch - %s", title]];
++    // Appended (not just set once at launch) so it survives any later window_set_caption()
++    // call the game itself makes during play.
++    [window setTitle:[NSString stringWithFormat:@"%s — RockGroup™ Mac Port", title]];
+ }
+ 
+ bool platformGetWindowSize(int32_t *outW, int32_t *outH) {
+@@ -541,7 +559,10 @@ bool platformInit(int32_t reqW, int32_t reqH, const char *title, bool headless)
+     if (!window)
+         return false;
+ 
+-    [window setTitle:[NSString stringWithFormat:@"%s", title]];
++    // Branded here (not just in platformSetWindowTitle) because this is the title actually
++    // set at launch; platformSetWindowTitle only fires if the game calls window_set_caption()
++    // from GML, which VA-11 Hall-A never does, so that path alone never took effect.
++    [window setTitle:[NSString stringWithFormat:@"%s — RockGroup™ Mac Port", title]];
+     [window setAcceptsMouseMovedEvents:YES];
+ 
+     // Create OpenGL view
+diff --git a/src/vm_builtins.c b/src/vm_builtins.c
+index 4a96923..45e5428 100644
+--- a/src/vm_builtins.c
++++ b/src/vm_builtins.c
+@@ -8129,6 +8129,26 @@ static RValue builtin_game_end(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_
+     runner->shouldExit = true;
+     return RValue_makeUndefined();
+ }
++
++// Was previously entirely unregistered (fell through the VM's generic "unknown function"
++// fallback, which just returns undefined and keeps executing). Real GameMaker's show_error
++// halts the game when abort=true - GML error-recovery paths that call it to bail out of a
++// broken state (e.g. a missing optional data file) rely on it actually stopping execution.
++// Silently continuing past it left the caller running with no fallback logic, which one such
++// path (VA-11 Hall-A's textbox_find_pointer_line, triggered by a missing script file) turned
++// into a busy-loop that never yielded back to the run loop - 100% CPU on the main thread and
++// a black/frozen window, confirmed via `sample`. Real GameMaker shows a dialog too, but the
++// log message plus actually stopping is what the caller structurally depends on.
++static RValue builtin_show_error(VMContext* ctx, RValue* args, int32_t argCount) {
++    const char* message = (argCount > 0 && args[0].type == RVALUE_STRING) ? args[0].string : "(no message)";
++    bool doAbort = argCount > 1 && RValue_toBool(args[1]);
++    logError("show_error: %s\n", message);
++    if (doAbort) {
++        Runner* runner = ctx->runner;
++        runner->shouldExit = true;
++    }
++    return RValue_makeUndefined();
++}
+ STUB_RETURN_UNDEFINED(game_save)
+ STUB_RETURN_UNDEFINED(game_load)
+ 
+@@ -17858,6 +17878,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
+     VM_registerBuiltin(ctx, "game_end", builtin_game_end);
+     VM_registerBuiltin(ctx, "game_save", builtin_game_save);
+     VM_registerBuiltin(ctx, "game_load", builtin_game_load);
++    VM_registerBuiltin(ctx, "show_error", builtin_show_error);
+ 
+     // Instance
+     VM_registerBuiltin(ctx, "instance_exists", builtin_instance_exists);
